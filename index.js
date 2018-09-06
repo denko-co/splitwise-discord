@@ -5,7 +5,8 @@ const credentials = require('./credentials.json');
 const testChannel = '485812106323558410';
 const sw = Splitwise({
   consumerKey: process.env.KEY || credentials.consumerKey,
-  consumerSecret: process.env.SECRET || credentials.consumerSecret
+  consumerSecret: process.env.SECRET || credentials.consumerSecret,
+  logger: console.log
 });
 
 sw.getCurrentUser().then((info) => {
