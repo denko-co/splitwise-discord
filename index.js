@@ -1,6 +1,16 @@
 const Discord = require('discord.js');
 const bot = new Discord.Client({autoReconnect: true});
+const Splitwise = require('splitwise');
 const testChannel = '485812106323558410';
+const sw = Splitwise({
+  consumerKey: 'consumerKey',
+  consumerSecret: 'consumerSecret'
+});
+
+sw.getCurrentUser().then((info) => {
+  console.log("It's working?");
+  console.log(info);
+});
 
 bot.login(process.env.TOKEN);
 
