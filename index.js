@@ -154,6 +154,7 @@ bot.on('message', async function (message) {
     switch (command[1]) {
       case 'assign':
         if (!command[2]) return message.channel.send('Please mention a Discord user you want to assign a Splitwise user to.');
+        // Could be moved into its own function like getClientByMention but it's only done once so I'll leave it
         let assignedUserMention = getUserFromMention(command[2]);
         let assignedUser = message.guild.members.get(assignedUserMention);
         if (!assignedUser) {
@@ -193,13 +194,9 @@ bot.on('message', async function (message) {
         break;
       case 'note':
         if (!command[2]) return message.channel.send('Please mention the user you want to add a note for.');
-        let noteUserMention = getUserFromMention(command[2]);
-        let noteUser = clientsTable.findOne({'userId': noteUserMention, 'groupId': groupRef.groupId});
-        if (!noteUser) {
-          return message.channel.send('Sorry, I don\'t have an assigned user reference for \'' + command[2] +
-            '\'. Please make sure you are using a proper user mention, not a name, and make sure they\'ve been assigned ' +
-            'using the `assign` command.');
-        }
+        let noteUserResult = getClientByMention(command[2], groupRef.groupId);
+        if (noteUserResult.error) return message.channel.send(noteUserResult.error);
+        let noteUser = noteUserResult.client;
         let note = originalCommand.slice(3, originalCommand.length).join(' ');
         if (note.length > MAX_NOTE_LENGTH) {
           return message.channel.send('Sorry, the maximum note length is ' + MAX_NOTE_LENGTH +
@@ -214,6 +211,34 @@ bot.on('message', async function (message) {
         db.saveDatabase();
         break;
       case 'tip':
+        let tipGiverResult = getClientByMention(message.author.id, groupRef.groupId);
+        if (tipGiverResult.error) return message.channel.send(tipGiverResult.error);
+        let tipGiver = tipGiverResult.client;
+        if (!command[2]) return message.channel.send('Please mention the user you want to tip.');
+        let tipRecieverResult = getClientByMention(command[2], groupRef.groupId);
+        if (tipRecieverResult.error) return message.channel.send(tipRecieverResult.error);
+        let tipReciever = tipRecieverResult.client;
+        if (tipGiver === tipReciever) return message.channel.send('You can\'t tip yourself! I won\'t allow it!');
+        if (!command[3]) return message.channel.send('Please specify how much $ you want to tip ' + command[2] + '.');
+        let amount = getCostFromString(command[3]);
+        if (amount <= 0) return message.channel.send('Please specify a valid amount of $ to tip.');
+        let tipReason = originalCommand.slice(4, originalCommand.length).join(' ');
+        tipReason = tipReason.length === 0 ? '!' : ', with reason: \'' + tipReason + '\'';
+        // All set.
+        sw.createDebt({
+          from: tipReciever.swUser,
+          to: tipGiver.swUser,
+          amount: amount,
+          description: 'Tip from Discord' + tipReason,
+          group_id: groupRef.groupId
+        }).then(expenseInfo => {
+          tipGiver.tipsGiven += expenseInfo.cost;
+          message.channel.send('A generous donation. Enjoy ' + command[2] + '.');
+          db.saveDatabase();
+        }).catch(err => {
+          console.error(err);
+          message.channel.send('Something went wrong when trying to tip ' + command[2] + '. Try again later?');
+        });
         break;
       case 'info':
         break;
@@ -224,6 +249,21 @@ bot.on('message', async function (message) {
     }
   }
 });
+
+function getCostFromString (str) {
+  return Number(str.replace(/[^0-9.-]+/g, ''));
+}
+
+function getClientByMention (mention, groupId) {
+  let userMention = getUserFromMention(mention);
+  let user = db.getCollection('clients').findOne({'userId': userMention, 'groupId': groupId});
+  return user ? {client: user, error: null } : {
+    client: null,
+    error: 'Sorry, I don\'t have an assigned user reference for \'' + mention +
+    '\'. Please make sure you are using a proper user mention, not a name, and make sure they\'ve been assigned ' +
+    'using the `assign` command.'
+  };
+}
 
 function getSwDisplayName (userObj) {
   return (userObj.first_name + ' ' + (userObj.last_name || '')).trim();
