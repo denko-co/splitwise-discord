@@ -3,6 +3,7 @@ const bot = new Discord.Client({autoReconnect: true});
 const Loki = require('lokijs');
 const Splitwise = require('splitwise');
 const credentials = require('./credentials.json');
+const MAX_NOTE_LENGTH = 1000;
 const sw = Splitwise({
   consumerKey: process.env.KEY || credentials.consumerKey,
   consumerSecret: process.env.SECRET || credentials.consumerSecret,
@@ -56,8 +57,8 @@ bot.on('guildCreate', function (guild) {
 
 bot.on('message', async function (message) {
   if (!message.author.bot && message.guild) {
-    let command = message.content.match(/[^\s"]+|"(?:[^"\\]|\\")*"/g) || []; // Help servers are useless
-    command = command.map(str => {
+    let originalCommand = message.content.match(/[^\s"]+|"(?:[^"\\]|\\")*"/g) || []; // Help servers are useless
+    let command = originalCommand.map(str => {
       // Unescape quotes in the string target if it's a quoted string and trim the start and end quotes
       if (str.charAt(0) === '"' && str.charAt(str.length - 1) === '"' && str.length > 1) {
         str = str.substring(1, str.length - 1).trim().replace(/\\"/g, '"');
@@ -191,10 +192,32 @@ bot.on('message', async function (message) {
         db.saveDatabase();
         break;
       case 'note':
+        if (!command[2]) return message.channel.send('Please mention the user you want to add a note for.');
+        let noteUserMention = getUserFromMention(command[2]);
+        let noteUser = clientsTable.findOne({'userId': noteUserMention, 'groupId': groupRef.groupId});
+        if (!noteUser) {
+          return message.channel.send('Sorry, I don\'t have an assigned user reference for \'' + command[2] +
+            '\'. Please make sure you are using a proper user mention, not a name, and make sure they\'ve been assigned ' +
+            'using the `assign` command.');
+        }
+        let note = originalCommand.slice(3, originalCommand.length).join(' ');
+        if (note.length > MAX_NOTE_LENGTH) {
+          return message.channel.send('Sorry, the maximum note length is ' + MAX_NOTE_LENGTH +
+            ', and your note is ' + note.length + 'characters. Cost cutting at the firm, you know how it is.');
+        }
+        if (noteUser.note) {
+          message.channel.send('Note updated for user ' + command[2] + ', old note shredded.');
+        } else {
+          message.channel.send(note.length === 0 ? 'Note for ' + command[2] + ' is already empty.' : 'Note added for user ' + command[2] + '.');
+        }
+        noteUser.note = note;
+        db.saveDatabase();
+        break;
+      case 'tip':
         break;
       case 'info':
         break;
-      case 'tip':
+      case 'help':
         break;
       default:
         // User is probably trying to create an expense
