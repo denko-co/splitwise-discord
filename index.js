@@ -89,7 +89,7 @@ bot.on('message', async function (message) {
         // Didn't work, try a text lookup
         try {
           let groups = await sw.getGroups(); // This really shouldn't detonate
-          let matchingGroups = groups.filter(group => group.name.startsWith(groupId));
+          let matchingGroups = groups.filter(group => group.name.toLowerCase().startsWith(groupId.toLowerCase()));
           let assignedGroups = groupsTable.chain().data().map(obj => obj.groupId); // chain().data() xd
           let nonAssignedMatchingGroups = matchingGroups.filter(group => !assignedGroups.includes(group.id));
           if (nonAssignedMatchingGroups.length > 1) {
@@ -174,7 +174,7 @@ bot.on('message', async function (message) {
           } else {
             // Rebind old user
             message.channel.send(command[2] + ' user id changed from ' + assignedUserDb.swUser + ' to ' + assignedReference.user.id + '. ' +
-              'Pleasure to make your acquaintance ' + getSwDisplayName(assignedReference.user) + '.');
+              'Pleasure to make your acquaintance ' + assignedReference.user.first_name + '.');
             assignedUserDb.swUser = assignedReference.user.id;
           }
         } else {
@@ -185,7 +185,7 @@ bot.on('message', async function (message) {
             userId: assignedUserMention,
             groupId: groupRef.groupId,
             swUser: assignedReference.user.id,
-            notes: null,
+            notes: '',
             tipsGiven: 0
           });
         }
@@ -201,12 +201,12 @@ bot.on('message', async function (message) {
           return message.channel.send('Sorry, the maximum note length is ' + MAX_NOTE_LENGTH +
             ', and your note is ' + note.length + 'characters. Cost cutting at the firm, you know how it is.');
         }
-        if (noteUser.note) {
+        if (noteUser.notes) {
           message.channel.send('Note updated for user ' + command[2] + ', old note shredded.');
         } else {
           message.channel.send(note.length === 0 ? 'Note for ' + command[2] + ' is already empty.' : 'Note added for user ' + command[2] + '.');
         }
-        noteUser.note = note;
+        noteUser.notes = note;
         db.saveDatabase();
         break;
       case 'tip':
@@ -231,7 +231,7 @@ bot.on('message', async function (message) {
           description: 'Tip from Discord' + tipReason,
           group_id: groupRef.groupId
         }).then(expenseInfo => {
-          tipGiver.tipsGiven += expenseInfo.cost;
+          tipGiver.tipsGiven += parseFloat(expenseInfo.cost);
           message.channel.send('A generous donation. Enjoy ' + command[2] + '.');
           db.saveDatabase();
         }).catch(err => {
@@ -242,6 +242,55 @@ bot.on('message', async function (message) {
       case 'info':
         if (command[2]) {
           // Get info for a specific user
+          let infoUserResult = getClientByMention(command[2], groupRef.groupId);
+          if (infoUserResult.error) return message.channel.send(infoUserResult.error);
+          let infoUser = infoUserResult.client;
+          let swUser;
+          try {
+            swUser = await sw.getUser({id: infoUser.swUser});
+          } catch (err) {
+            // Can't fetch user
+            console.error(err);
+            return message.channel.send('Sorry, something went wrong when retrieving the info for ' + command[2] + ' from Splitwise. Try again?');
+          }
+          let msg = 'Info for user *' + command[2] + ':*\n';
+          msg += '**Splitwise name:** ' + getSwDisplayName(swUser) + '\n';
+          if (swUser.email.endsWith('@example.com')) {
+            msg += '**Email address:** BLANK';
+          } else if (swUser.email.endsWith('@phone.com')) {
+            msg += '**Phone number:** ' + swUser.email.substring(0, swUser.email.indexOf('@phone.com'));
+          } else {
+            msg += '**Email address:** ' + swUser.email;
+          }
+          msg += '\n';
+          msg += '**Notes:** ' + (infoUser.notes ? '\n' + infoUser.notes : 'BLANK') + '\n';
+          msg += '**Tips given:** $' + infoUser.tipsGiven + '\n';
+          let userBalance = groupInfo.members.find(member => member.id === infoUser.swUser).balance[0];
+          msg += '**Balance:** $' + (userBalance ? parseFloat(userBalance.amount) : 0) + '\n';
+          msg += '**Suggested repayments:**\n```diff\n';
+          let debtCollection = groupInfo.simplify_by_default ? groupInfo.simplified_debts : groupInfo.original_debts;
+          let filteredDebts = debtCollection.filter(debt => debt.from === infoUser.swUser || debt.to === infoUser.swUser);
+          if (filteredDebts.length === 0) {
+            msg += swUser.first_name + ' is all settled up';
+          } else {
+            let sortedDebts = filteredDebts.map(debt => {
+              let otherUserId = debt.from === infoUser.swUser ? debt.to : debt.from;
+              let otherUser = groupInfo.members.find(member => member.id === otherUserId);
+              let amountString = debt.from === infoUser.swUser
+                ? swUser.first_name + ' owes $' + debt.amount + ' to ' + getSwDisplayNameShortened(otherUser)
+                : getSwDisplayNameShortened(otherUser) + ' owes $' + debt.amount + ' to ' + swUser.first_name;
+              return {
+                amount: debt.amount * (debt.from === infoUser.swUser ? -1 : 1),
+                string: amountString,
+                user: getSwDisplayName(otherUser)
+              };
+            }).sort((a, b) => a.amount === b.amount ? a.user.localeCompare(b.user) : b.amount - a.amount);
+            sortedDebts.forEach(debt => {
+              msg += (debt.amount > 0 ? '+' : '-') + ' ' + debt.string + '\n';
+            });
+          }
+          msg += '```';
+          message.channel.send(msg);
         } else {
           // Get info for the whole group
           let balanceList = groupInfo.members.map(member => {
@@ -262,7 +311,7 @@ bot.on('message', async function (message) {
           groupSummary += '```';
           let msg = 'Info for group *' + groupInfo.name + '* (' + groupInfo.members.length + ' members):\n';
           msg += '**Simplify debts:** ' + (groupInfo.simplify_by_default ? 'ON' : 'OFF') + '\n';
-          msg += '**Whiteboard:** ' + (groupInfo.whiteboard ? '\n' + groupInfo.whiteboard : 'EMPTY') + '\n';
+          msg += '**Whiteboard:** ' + (groupInfo.whiteboard ? '\n' + groupInfo.whiteboard : 'BLANK') + '\n';
           msg += '**Invite link:** ' + groupInfo.invite_link + '\n';
           msg += '**Balance summary:**\n' + groupSummary;
           message.channel.send(msg);
@@ -295,6 +344,10 @@ function getSwDisplayName (userObj) {
   return (userObj.first_name + ' ' + (userObj.last_name || '')).trim();
 }
 
+function getSwDisplayNameShortened (userObj) {
+  return (userObj.first_name + ' ' + (userObj.last_name ? userObj.last_name.charAt(0) + '.' : '')).trim();
+}
+
 async function resolveReference (reference, groupInfo, userInfo) {
   // We've be passed a reference, we have to try hunt down an id.
   // Now, the problem is that the splitwise API doesn't give you an email in group.members
@@ -305,11 +358,11 @@ async function resolveReference (reference, groupInfo, userInfo) {
   if (user) return {user: user, error: null, userInfo: userInfo};
 
   // Then, we do a name lookup.
-  let users = groupInfo.members.filter(swUser => getSwDisplayName(swUser) === reference);
+  let users = groupInfo.members.filter(swUser => getSwDisplayName(swUser).toLowerCase().startsWith(reference.toLowerCase()));
   if (users.length > 1) {
     // Multiple users found, nty
     return {user: null,
-      error: 'Sorry, mutiple users in your group have the name \'' + reference + '\', I don\'t know who to choose!',
+      error: 'Sorry, mutiple users in your group start with \'' + reference + '\', I don\'t know who to choose!',
       userInfo: userInfo
     };
   } else if (users.length === 1) {
