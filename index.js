@@ -142,14 +142,12 @@ bot.on('message', async function (message) {
     }
     // We should fetch the group info now, as we're going to be using it a lot
     let groupInfo;
-    let userInfo;
     try {
       groupInfo = await sw.getGroup({id: groupRef.groupId});
-      userInfo = await Promise.all(groupInfo.members.map(member => sw.getUser({id: member.id})));
     } catch (err) {
       // Splitwise has exploded
       console.error(err);
-      return message.channel.send('Sorry, something went wrong when retrieving info from Splitwise. Try again?');
+      return message.channel.send('Sorry, something went wrong when retrieving group info from Splitwise. Try again?');
     }
     switch (command[1]) {
       case 'assign':
@@ -166,8 +164,9 @@ bot.on('message', async function (message) {
           return message.channel.send('What on Splitwise do you want me to assign this user to? ' +
             'You can use either their full name, their phone number (with the + extension), or their email.');
         }
-        let assignedReference = resolveReference(assignedReferenceText, userInfo);
+        let assignedReference = await resolveReference(assignedReferenceText, groupInfo, null);
         if (assignedReference.error) return message.channel.send(assignedReference.error);
+        // Should store userInfo, but we aren't doing another lookup afterwards
         let assignedUserDb = clientsTable.findOne({'userId': assignedUserMention, 'groupId': groupRef.groupId});
         if (assignedUserDb) {
           if (assignedUserDb.swUser === assignedReference.user.id) {
@@ -241,6 +240,33 @@ bot.on('message', async function (message) {
         });
         break;
       case 'info':
+        if (command[2]) {
+          // Get info for a specific user
+        } else {
+          // Get info for the whole group
+          let balanceList = groupInfo.members.map(member => {
+            let amount = member.balance[0] ? parseFloat(member.balance[0].amount) : 0;
+            let amountString = amount === 0 ? 'settled up' : amount > 0 ? 'gets back $' + amount : 'owes $' + Math.abs(amount);
+            return {
+              amount: amount,
+              string: amountString,
+              user: getSwDisplayName(member)
+            };
+          });
+          balanceList.sort((a, b) => a.amount === b.amount ? a.user.localeCompare(b.user) : b.amount - a.amount);
+          let groupSummary = '```diff\n';
+          balanceList.forEach(balance => {
+            let diffSign = balance.amount === 0 ? ' ' : balance.amount > 0 ? '+' : '-';
+            groupSummary += diffSign + ' ' + balance.user + ' ' + balance.string + '\n';
+          });
+          groupSummary += '```';
+          let msg = 'Info for group *' + groupInfo.name + '* (' + groupInfo.members.length + ' members):\n';
+          msg += '**Simplify debts:** ' + (groupInfo.simplify_by_default ? 'ON' : 'OFF') + '\n';
+          msg += '**Whiteboard:** ' + (groupInfo.whiteboard ? '\n' + groupInfo.whiteboard : 'EMPTY') + '\n';
+          msg += '**Invite link:** ' + groupInfo.invite_link + '\n';
+          msg += '**Balance summary:**\n' + groupSummary;
+          message.channel.send(msg);
+        }
         break;
       case 'help':
         break;
@@ -269,25 +295,38 @@ function getSwDisplayName (userObj) {
   return (userObj.first_name + ' ' + (userObj.last_name || '')).trim();
 }
 
-function resolveReference (reference, userInfo) {
+async function resolveReference (reference, groupInfo, userInfo) {
   // We've be passed a reference, we have to try hunt down an id.
-  // We can check id, email and phone number in one swoop because these are unique.
-  let user = userInfo.find(swUser => swUser.id === reference ||
-    swUser.email === reference ||
-    swUser.email === reference + '@phone.com'); // gj Splitwise
-  if (user) return {user: user, error: null};
-  // Now we see how many matches we get out of a name check (these can be duplicates)
-  let users = userInfo.filter(swUser => getSwDisplayName(swUser) === reference);
+  // Now, the problem is that the splitwise API doesn't give you an email in group.members
+  // Fetching all the emails is berry slow tho, so we are going to try to accomodate
+
+  // First, we check id, because we have that in group.members
+  let user = groupInfo.members.find(swUser => swUser.id === reference);
+  if (user) return {user: user, error: null, userInfo: userInfo};
+
+  // Then, we do a name lookup.
+  let users = groupInfo.members.filter(swUser => getSwDisplayName(swUser) === reference);
   if (users.length > 1) {
     // Multiple users found, nty
-    return {user: null, error: 'Sorry, mutiple users in your group have the name \'' + reference + '\', I don\'t know who to choose!'};
+    return {user: null,
+      error: 'Sorry, mutiple users in your group have the name \'' + reference + '\', I don\'t know who to choose!',
+      userInfo: userInfo
+    };
   } else if (users.length === 1) {
     // Gottem
-    return {user: users[0], error: null};
-  } else {
-    // Despite our best efforts
-    return {user: null, error: 'Sorry, I couldn\'t find a user with the reference \'' + reference + '\' in your group. '};
+    return {user: users[0], error: null, userInfo: userInfo};
   }
+
+  // If we're here, we got no results from the name lookup
+  // Now we've exhausted name and id, go and fetch all of them for a filter
+  if (!userInfo) {
+    userInfo = await Promise.all(groupInfo.members.map(member => sw.getUser({id: member.id})));
+  }
+
+  // Run the email filter on userInfo
+  user = userInfo.find(swUser => swUser.email === reference || swUser.email === reference + '@phone.com'); // gj Splitwise
+  const defaultError = 'Sorry, I couldn\'t find a user with the reference \'' + reference + '\' in your group.';
+  return user ? {user: user, error: null, userInfo: userInfo} : {user: null, error: defaultError, userInfo: userInfo};
 }
 
 function getUserFromMention (mention) {
