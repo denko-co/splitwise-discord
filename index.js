@@ -318,9 +318,171 @@ bot.on('message', async function (message) {
         }
         break;
       case 'help':
+        message.channel.send(':)');
         break;
       default:
         // User is probably trying to create an expense
+        let group1 = [];
+        let group2 = [];
+        let userInfo = null;
+        let modifier = null;
+        let totalAmount = null;
+        let isSplitting = false;
+        let splitAmount = [];
+        let each = false;
+        let equally = false;
+        let reason = null;
+        for (let i = 1; i < command.length; i++) {
+          let param = command[i];
+          let lowerParam = param.toLowerCase();
+          if (['owes', 'owe', 'paid'].includes(lowerParam)) {
+            // User is specifying the bill type. Run some checks.
+            if (group1.length === 0) return message.channel.send('Creating debts requires a user on the left hand side of the modifier.');
+            if (modifier !== null) return message.channel.send('Mutiple modifiers are not permitted');
+            if (lowerParam === 'paid') {
+              if (command[i + 1] && command[i + 1].toLowerCase() === 'for') {
+                // Payment (paid for)
+                i++; // Skip 'for'
+                modifier = {
+                  paid: false,
+                  ltr: false
+                };
+              } else {
+                modifier = {
+                  paid: true,
+                  ltr: true
+                };
+              }
+            } else {
+              // Owes
+              modifier = {
+                paid: false,
+                ltr: true
+              };
+            }
+          } else if (modifier !== null && !isSplitting && (['$', '.', '-'].includes(param.charAt(0)) || param.match(/^\d/))) {
+            if (group2.length === 0) return message.channel.send('Creating debts requires a user on the right hand side of the modifier.');
+            if (totalAmount !== null) return message.channel.send('Mutiple total payment amounts are not permitted.');
+            // Parse $$$$
+            totalAmount = getCostFromString(param);
+            if (totalAmount <= 0) return message.channel.send('Please specify a valid total amount of $');
+          } else if (totalAmount) {
+            if (lowerParam === 'for') {
+              reason = originalCommand.slice(i + 1, originalCommand.length).join(' ');
+              if (!reason) return message.channel.send('Reason for debt must be specified with `for`');
+              break;
+            } else if (lowerParam === 'each') {
+              if (isSplitting) return message.channel.send('`each` can\'t be combined with a `split`');
+              if (each) return message.channel.send('Can\'t stack `each`. What would that even do?');
+              each = true;
+            } else if (lowerParam === 'split') {
+              if (each) return message.channel.send('`split` can\'t be combined with an `each`');
+              if (isSplitting) return message.channel.send('Can\'t stack `split`. What would that even do?');
+              isSplitting = true;
+            } else if (['equally', 'equal'].includes(lowerParam)) {
+              if (isSplitting && splitAmount.length > 0) return message.channel.send('Can\'t specify a way to split with `equally`');
+              if (equally) return message.channel.send('Can\'t stack `equal`. What would that even do?');
+              equally = true;
+            } else if (isSplitting) {
+              // Manage split as $ amounts
+              let subsplitAmount = getCostFromString(param);
+              if (subsplitAmount <= 0) return message.channel.send('Please specify a valid total amount of $ for the split.');
+              splitAmount.push(subsplitAmount);
+            } else {
+              return message.channel.send('Command ' + param + ' not understood. See ' + bot.user.toString() + '` help` for details.');
+            }
+          } else {
+            // First, see if this resolves to a client
+            let userId;
+            let userIdInfo = getClientByMention(param, groupRef.groupId);
+            if (!userIdInfo.error) {
+              userId = userIdInfo.client.swUser;
+            } else {
+              // No client, look for a sw user using assign logic
+              userIdInfo = await resolveReference(param, groupInfo, userInfo);
+              if (userIdInfo.error) return message.channel.send(userIdInfo.error);
+              // Cache users
+              userInfo = userIdInfo.userInfo;
+              userId = userIdInfo.user.id;
+            }
+            // Ensure user hasn't been referenced before
+            if (group1.concat(group2).includes(userId)) return message.channel.send('Users involved in the debt must be unique.');
+            // If we're down here we have a user id, find where to push it
+            if (modifier === null) {
+              group1.push(userId);
+            } else {
+              // Check we don't have a many to many
+              if (group1.length > 1 && group2.length) {
+                return message.channel.send('One side of the modifier must only have one user.');
+              }
+              group2.push(userId);
+            }
+          }
+        }
+        // No more command to parse, ready to resolve
+        if (group1.length === 0 || group2.length === 0) {
+          return message.channel.send('To create a debt, two user groups and a modifier are required. ' +
+            'See ' + bot.user.toString() + '` help` for details.');
+        } else if (totalAmount === null) {
+          return message.channel.send('To create a debt, a total $ amount is required.');
+        } else if (reason === null) {
+          return message.channel.send('To create a debt, a reason is required, using `for`');
+        }
+        // Figure out if there is a valid money split here
+        // Did ya know !== works like XOR? Now you do!
+        let giving = modifier.ltr !== modifier.paid ? group1 : group2;
+        let receiving = modifier.ltr !== modifier.paid ? group2 : group1;
+        let splitGroup = giving.length > 1 ? giving : receiving;
+        if (isSplitting) {
+          if (equally) {
+            splitAmount = splitGroup.map(() => toFixed(totalAmount / splitGroup.length, 2));
+            splitAmount[splitAmount.length - 1] = totalAmount - splitAmount.slice(0, splitAmount.length - 1).reduce((a, b) => a + b, 0);
+          } else if (splitAmount.length !== splitGroup.length) {
+            return message.channel.send('Please specify exactly one split amount for each user in the debt.');
+          } else {
+            let splitTotal = splitAmount.reduce((a, b) => a + b, 0);
+            if (splitTotal !== totalAmount) return message.channel.send('Split amounts do not sum to the total amount.');
+          }
+        } else if (each) {
+          splitAmount = splitGroup.map(() => totalAmount);
+          totalAmount = totalAmount * splitGroup.length;
+        } else {
+          // Split equally in the same way
+          splitAmount = splitGroup.map(() => toFixed(totalAmount / splitGroup.length, 2));
+          splitAmount[splitAmount.length - 1] = totalAmount - splitAmount.slice(0, splitAmount.length - 1).reduce((a, b) => a + b, 0);
+        }
+
+        // Finally, after all these years, let's create a debt
+        let debtObjs = [];
+        // Could combine these but I feel it's more readable like this
+        for (let i = 0; i < giving.length; i++) {
+          debtObjs.push({
+            user_id: giving[i],
+            owed_share: giving === splitGroup ? splitAmount[i] : totalAmount
+          });
+        }
+
+        for (let i = 0; i < receiving.length; i++) {
+          debtObjs.push({
+            user_id: receiving[i],
+            paid_share: receiving === splitGroup ? splitAmount[i] : totalAmount
+          });
+        }
+        let swObj = {
+          description: reason,
+          group_id: groupRef.groupId,
+          payment: modifier.paid,
+          cost: totalAmount,
+          users: debtObjs
+        };
+        console.log(swObj);
+        sw.createExpense(swObj).then(expenseInfo => {
+          console.log(expenseInfo);
+          message.channel.send('Transaction recorded! Images and notes can be added through Splitwise.');
+        }).catch(err => {
+          console.error(err);
+          message.channel.send('Something went wrong when trying to add the transaction. Try again later?');
+        });
     }
   }
 });
@@ -338,6 +500,11 @@ function getClientByMention (mention, groupId) {
     '\'. Please make sure you are using a proper user mention, not a name, and make sure they\'ve been assigned ' +
     'using the `assign` command.'
   };
+}
+
+// https://stackoverflow.com/a/23560569
+function toFixed (num, precision) {
+  return Number((+(Math.round(+(num + 'e' + precision)) + 'e' + -precision)).toFixed(precision));
 }
 
 function getSwDisplayName (userObj) {
