@@ -183,6 +183,7 @@ bot.on('message', async function (message) {
         });
       }
       db.saveDatabase();
+      return;
     } else {
       // If we're mentioned with some text and there's no group ref, ask them to set it. Otherwise fall through to large handler.
       if (!groupRef) {
@@ -230,7 +231,7 @@ bot.on('message', async function (message) {
         } else {
           // Make the connection (<3)
           message.channel.send(command[2] + ' assigned to user id ' + assignedReference.user.id + '. ' +
-          'Pleasure to make your acquaintance ' + getSwDisplayName(assignedReference.user) + '.');
+          'Pleasure to make your acquaintance ' + assignedReference.user.first_name + '.');
           clientsTable.insert({
             userId: assignedUserMention,
             groupId: groupRef.groupId,

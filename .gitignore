@@ -2,3 +2,4 @@ node_modules/
 package-lock.json
 credentials.json
 splitwise.json
+splitwise-old.json
