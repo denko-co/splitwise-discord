@@ -32,6 +32,56 @@ function getHowToText () {
   return msg;
 }
 
+function getHelpTextIntro () {
+  let msg = 'Hi, I\'m Toichi, and I\'ve been sent by the firm to help you manage your Splitwise.\n';
+  msg += 'I have a lot of useful commands available, but here are the ones in your price range. 😉\n';
+  msg += 'Commands are used by mentioning me, ' + bot.user.toString() + ', and then one of the following. ';
+  msg += 'Parameters with spaces can be quoted `"like so"`, and quotes inside that are escaped with \\\\".\n';
+  msg += '-------';
+  return msg;
+}
+
+function getHelpTextCommands () {
+  let msg = '`set (as) <group id | name of group>` will let me know which of my Splitwise groups belongs to you. ';
+  msg += 'As you know, I need a group reference before I can do anything else.\n';
+  msg += '`assign <user mention> (as) <splitwise name | id | email | phone number>` will let me know who is who ';
+  msg += 'between this server and the Splitwise group set. Make sure you are searching with the details you ';
+  msg += 'used for Splitwise, and the more specific the better (full names are easiest). You need to be assigned ';
+  msg += 'in order to use the tip and note functionality.\n';
+  msg += '`note <user mention> <note content>` sets a note for the mentioned user, and erases the old one. ';
+  msg += 'Notes are useful for storing bank account details and inside jokes, ';
+  msg += 'and are displayed when someone looks up the user\'s `info`.\n';
+  msg += '`info` with no mention provides info for the Splitwise group - who owes who, any whiteboard info, etc.\n';
+  msg += '`info <user mention>` provides info for the user (assuming they are assigned), including suggested repayments, ';
+  msg += 'any notes, and their Splitwise details.\n';
+  msg += '`tip <user mention> <amount> (reason)` allows you to tip an assigned user here, and have it show up on Splitwise as a debt.\n';
+  msg += '-------';
+  return msg;
+}
+
+function getHelpTextTransaction () {
+  let msg = 'Finally, the create transaction functionality has no command keyword, as takes the form of ';
+  msg += '`<list of user mentions | Splitwise details> <owe(s) | paid | paid for> <list of user mentions | Splitwise details> ';
+  msg += '<total amount> (split <split values>| each) for <reason>`. Let\'s break that down:\n';
+  msg += '`<list of user mentions | Splitwise details>` is a set of people involved in the transaction. ';
+  msg += 'This can be either assigned users, or some details from Splitwise (such as a name), like you would with `assign`.\n';
+  msg += '`<owe(s) | paid | paid for>` is just a text string, to let me know what exactly the transaction was.\n';
+  msg += '`<total amount>` is the full amount involved in the transaction, assuming `each` is not specified. For example, `$3.50`\n';
+  msg += 'Then, you can change how this is distributed using the following:\n';
+  msg += '`split <values>` will divy up the total amount across the mentioned users. ';
+  msg += 'For example, `split $10 $10 $20` for a $40 debt between 3 people. You can also say `split equally`, but this is default.\n';
+  msg += '`each` tells me that the total amount is actually for each person to pay/to be paid. ';
+  msg += 'For example, `@x owes @y @z $10 each` tells me that @x owes $20 all up.\n';
+  msg += 'The last thing to specify is `for (reason)`, which says what the transaction was for and gives me something to put on Splitwise.\n';
+  msg += 'Let\'s put everything we\'ve learnt together. Here are some sample transaction commands:\n';
+  msg += '`@x @y owe @z $10 split $4 $6 for some coffee`\n';
+  msg += '`"Firstname Lastname" paid @x $2 for chips`\n';
+  msg += '`toichi@tfwno.gf paid for @x @y $7 each for red bull and icecream`\n';
+  msg += '-------\n';
+  msg += 'That\'s everything. Hope I helped.';
+  return msg;
+}
+
 function getSetupString () {
   return 'If you need help with setting up, type ' + bot.user.toString() + '` help`.';
 }
@@ -318,7 +368,9 @@ bot.on('message', async function (message) {
         }
         break;
       case 'help':
-        message.channel.send(':)');
+        await message.channel.send(getHelpTextIntro());
+        await message.channel.send(getHelpTextCommands());
+        await message.channel.send(getHelpTextTransaction());
         break;
       default:
         // User is probably trying to create an expense
